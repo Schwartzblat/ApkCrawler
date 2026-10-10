@@ -38,6 +38,16 @@ APPS = [
         apkpure_app_path='12/com.keshet.mako.VOD'
         , patcher_name='MakoPatcher'
     ),
+    # The slug is רשת-13-צפייה-בכל-תוכניות-רשת, encoded in lowercase as APKMirror writes it in its links
+    AppConfig(
+        name='Reshet 13',
+        package_name='com.applicaster.iReshet',
+        apkmirror_app_id='%d7%a8%d7%a9%d7%aa-13-%d7%a6%d7%a4%d7%99%d7%99%d7%94-%d7%91%d7%9b%d7%9c-%d7%aa%d7%95%d7%9b%d7%a0%d7%99%d7%95%d7%aa-%d7%a8%d7%a9%d7%aa',
+        apkmirror_url_template='/apk/%d7%a8%d7%a9%d7%aa-13/'
+                               '%d7%a8%d7%a9%d7%aa-13-%d7%a6%d7%a4%d7%99%d7%99%d7%94-%d7%91%d7%9b%d7%9c-%d7%aa%d7%95%d7%9b%d7%a0%d7%99%d7%95%d7%aa-%d7%a8%d7%a9%d7%aa/'
+                               '%d7%a8%d7%a9%d7%aa-13-%d7%a6%d7%a4%d7%99%d7%99%d7%94-%d7%91%d7%9b%d7%9c-%d7%aa%d7%95%d7%9b%d7%a0%d7%99%d7%95%d7%aa-%d7%a8%d7%a9%d7%aa-{}-release/',
+        patcher_name='ReshetPatcher',
+    ),
     AppConfig(
         name='OkCupid',
         package_name='com.okcupid.okcupid',
