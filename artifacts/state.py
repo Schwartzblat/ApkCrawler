@@ -24,6 +24,8 @@ class AppState:
     length: Optional[int] = None
     kept: List[Kept] = field(default_factory=list)
     alerted: Dict[str, str] = field(default_factory=dict)
+    # failure streak key ("fetch", "post:<sha>", "patcher_version") -> ISO-8601 UTC time of its first failure
+    failing: Dict[str, str] = field(default_factory=dict)
 
 
 def _state_path(artifacts_dir: Path, package: str) -> Path:
@@ -41,6 +43,7 @@ def load(artifacts_dir: Path, package: str) -> AppState:
         length=data.get('length'),
         kept=[Kept(**k) for k in data.get('kept', [])],
         alerted=dict(data.get('alerted', {})),
+        failing=dict(data.get('failing', {})),  # absent in state saved before streaks existed
     )
 
 

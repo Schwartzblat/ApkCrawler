@@ -1,6 +1,8 @@
+import dataclasses
 import fcntl
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -12,6 +14,8 @@ from fakepatcher import SAMPLE_RECORD, calls, make_fake_patcher, set_behavior, s
 from httpfake import FakeHttp
 
 OK = (200, {'revision': 7})
+DEAD_URL = 'http://127.0.0.1:1/app.apk'  # nothing listens there
+T0 = datetime(2026, 10, 17, tzinfo=timezone.utc)
 
 
 @pytest.fixture
@@ -37,6 +41,24 @@ def env(tmp_path, monkeypatch):
         e.alerts = lambda: (artifacts_dir / 'alerts.log').read_text().splitlines() \
             if (artifacts_dir / 'alerts.log').exists() else []
         yield e
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """The pipeline's clock, starting at T0; advance it with clock.advance(minutes=...)."""
+    class Clock:
+        now = T0
+
+        def advance(self, **delta):
+            self.now += timedelta(**delta)
+    c = Clock()
+    monkeypatch.setattr(pipeline, '_now', lambda: c.now)
+    return c
+
+
+@pytest.fixture
+def no_backoff(monkeypatch):
+    monkeypatch.setattr('artifacts.publisher.time.sleep', lambda s: None)
 
 
 def test_new_apk_is_processed_and_posted(env):
@@ -212,6 +234,134 @@ def test_second_run_exits_when_locked(env, capsys):
     assert 'lock' in capsys.readouterr().out
 
 
+# --- failures that persist: one alert after an hour, cleared by recovery ---
+
+def test_fetch_failing_for_an_hour_alerts_once(env, clock):
+    env.app.direct_url = DEAD_URL
+    env.run()
+    assert env.state().failing == {'fetch': T0.isoformat()}
+    clock.advance(minutes=59)
+    env.run()
+    assert not env.alerts()
+    clock.advance(minutes=1)
+    env.run()
+    [alert] = env.alerts()
+    assert 'Fake' in alert and 'fetch' in alert
+    assert 'ConnectionError' in alert and T0.isoformat() in alert  # the last error and the first failure
+    clock.advance(minutes=15)
+    env.run()
+    assert len(env.alerts()) == 1
+
+
+def test_fetch_recovery_clears_the_streak_and_a_new_outage_alerts_again(env, clock):
+    env.app.direct_url = DEAD_URL
+    env.run()
+    clock.advance(hours=1)
+    env.run()
+    assert len(env.alerts()) == 1
+    env.app.direct_url = env.http.url
+    env.run()
+    state = env.state()
+    assert state.failing == {} and 'failing:fetch' not in state.alerted
+    assert state.kept[0].posted
+    env.app.direct_url = DEAD_URL
+    clock.advance(minutes=15)
+    env.run()
+    clock.advance(minutes=59)
+    env.run()
+    assert len(env.alerts()) == 1
+    clock.advance(minutes=1)
+    env.run()
+    assert len(env.alerts()) == 2
+
+
+def test_download_failure_is_a_fetch_failure(env, clock):
+    env.http.drop_after = 3
+    env.run()
+    state = env.state()
+    assert 'fetch' in state.failing and not state.kept and state.etag is None
+    clock.advance(hours=1)
+    env.run()
+    assert len(env.alerts()) == 1
+
+
+def test_server_unavailable_for_an_hour_alerts_once(env, clock, no_backoff):
+    env.http.post_responses = [(503, {'detail': 'Not configured'})]
+    env.run()
+    sha = env.state().kept[0].apk_sha256
+    assert env.state().failing == {f'post:{sha}': T0.isoformat()}
+    clock.advance(minutes=59)
+    env.run()
+    assert not env.alerts()
+    clock.advance(minutes=1)
+    env.run()
+    [alert] = env.alerts()
+    assert 'Fake' in alert and sha[:12] in alert and 'Not configured' in alert
+    clock.advance(minutes=15)
+    env.run()
+    assert len(env.alerts()) == 1
+    env.http.post_responses = [OK]
+    env.run()
+    state = env.state()
+    assert state.kept[0].posted
+    assert state.failing == {} and f'failing:post:{sha}' not in state.alerted
+
+
+def test_unreadable_patcher_version_alerts_after_an_hour(env, clock, capsys):
+    (env.patcher / 'constants.py').unlink()
+    env.run()
+    assert 'constants.py' in capsys.readouterr().out
+    assert env.http.head_count == 0 and 'patcher_version' in env.state().failing
+    clock.advance(hours=1)
+    env.run()
+    [alert] = env.alerts()
+    assert 'Fake' in alert and 'PATCHER_VERSION' in alert
+    clock.advance(minutes=15)
+    env.run()
+    assert len(env.alerts()) == 1
+    set_version(env.patcher, '3.0.0')
+    env.run()
+    state = env.state()
+    assert state.failing == {} and 'failing:patcher_version' not in state.alerted
+    assert state.kept[0].posted
+
+
+def test_unexpected_error_alerts_once_per_error_and_other_apps_still_run(env, capsys):
+    other = dataclasses.replace(env.app, name='Other', package_name='com.other')
+    broken = env.dir / 'com.fake' / 'state.json'
+    marker = env.dir / 'com.fake' / 'last_crash.txt'
+    broken.parent.mkdir(parents=True)
+    broken.write_text('{not json')
+
+    def run():
+        pipeline.run([env.app, other], env.patcher.parent, env.dir, env.http.base_url, 'sekret')
+    run()
+    assert 'Traceback' in capsys.readouterr().out
+    [alert] = env.alerts()
+    assert 'Fake' in alert and 'JSONDecodeError' in alert
+    assert load(env.dir, 'com.other').kept[0].posted  # the next app still ran
+    run()
+    assert len(env.alerts()) == 1
+    broken.write_text('[]')  # a different error alerts again
+    run()
+    assert len(env.alerts()) == 2 and 'AttributeError' in env.alerts()[1]
+    broken.unlink()
+    run()
+    assert not marker.exists() and env.state().kept[0].posted  # a clean pass forgets the crash
+    broken.write_text('[]')
+    run()
+    assert len(env.alerts()) == 3
+
+
+def test_crash_alert_never_contains_the_secret(env, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError('token sekret leaked')
+    monkeypatch.setattr(pipeline, 'post_record', boom)
+    env.run()
+    out = '\n'.join(env.alerts()) + (env.dir / 'com.fake' / 'last_crash.txt').read_text()
+    assert 'RuntimeError' in out and 'sekret' not in out
+
+
 # --- crawler.main wiring ---
 
 @pytest.fixture
@@ -267,6 +417,22 @@ def test_main_artifacts_requires_env(wired, monkeypatch, missing, capsys):
         wired('--pipeline', 'artifacts')
     err = capsys.readouterr().err
     assert missing in err and 'value-not-to-print' not in err
+
+
+@pytest.mark.parametrize('url', ['androidmod.site', 'ftp://androidmod.site', '//androidmod.site'])
+def test_main_artifacts_requires_an_http_server_url(wired, monkeypatch, capsys, url):
+    monkeypatch.setenv('PATCH_SERVER_URL', url)
+    monkeypatch.setenv('CRAWLER_SECRET', 's')
+    with pytest.raises(SystemExit):
+        wired('--pipeline', 'artifacts')
+    err = capsys.readouterr().err
+    assert 'PATCH_SERVER_URL' in err and 'androidmod.site' not in err
+
+
+def test_main_accepts_https_server_url(wired, monkeypatch):
+    monkeypatch.setenv('PATCH_SERVER_URL', 'HTTPS://androidmod.site')
+    monkeypatch.setenv('CRAWLER_SECRET', 's')
+    assert [s[0] for s in wired('--pipeline', 'artifacts')] == ['check', 'artifacts']
 
 
 def test_retry_failed_flag_parses():

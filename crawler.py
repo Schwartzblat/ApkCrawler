@@ -191,7 +191,9 @@ def main():
         for variable in (PATCH_SERVER_URL, CRAWLER_SECRET):
             if not os.environ.get(variable):
                 parser.error(f'{variable} is not set')
-    apps = (apps_in('build') if runs_build else []) + (apps_in('artifacts') if runs_artifacts else [])
+        if not os.environ[PATCH_SERVER_URL].lower().startswith(('http://', 'https://')):
+            parser.error(f'{PATCH_SERVER_URL} must start with http:// or https://')
+    apps =(apps_in('build') if runs_build else []) + (apps_in('artifacts') if runs_artifacts else [])
     apps = list({app.package_name: app for app in apps}.values())
     try:
         check_patchers(apps, need_paywall=runs_build)

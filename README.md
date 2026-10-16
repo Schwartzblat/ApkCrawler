@@ -15,8 +15,15 @@ and APKMirror into `/opt/patched` and patches them with `--paywall`. An app list
 **artifacts** (scheduled, see below): for each app whose `pipelines` contains `artifacts` (today WhatsApp),
 polls the app's direct URL (`direct_url` in `apps.py`), and when the APK changed runs the patcher's
 signature finders (`main.py --artifactory-only`). The resulting version record is posted to the server
-(`POST $PATCH_SERVER_URL/api/internal/records`, header `X-Internal-Token`). Problems send one alert
-email and are appended to `alerts.log`.
+(`POST $PATCH_SERVER_URL/api/internal/records`, header `X-Internal-Token`). Every alert is an email
+(when configured) and a line in `alerts.log`; each problem alerts once:
+
+- A patcher crash, a rejected record and an unsupported record (or one with features off) alert at once.
+- Failures every run retries by itself (fetching the APK, posting while the server is unavailable,
+  reading `PATCHER_VERSION`) alert after an hour of continuous failure. The first success ends the
+  streak, so the next outage alerts again.
+- An unexpected error in an app's processing (for example a corrupt `state.json`) prints a traceback,
+  alerts once per distinct error and lets the other apps run; a clean run of that app re-arms it.
 
     ./run_crawler.sh --pipeline artifacts
     ./run_crawler.sh --pipeline artifacts --retry-failed   # see "Failures" below
@@ -32,7 +39,7 @@ activates `.venv`. `.env` holds secrets: `chmod 600 .env`. Never commit it.
 | `PATCHERS_DIR` | both | Directory holding the patchers (`<PatcherName>/main.py`) |
 | `PAYWALL_PATH` | build | The PatchPaywall checkout passed to the patchers |
 | `GOOGLE_API_KEY` | build, optional | Passed to the downloader with `-g` |
-| `PATCH_SERVER_URL` | artifacts | Server base URL, e.g. `https://androidmod.site` |
+| `PATCH_SERVER_URL` | artifacts | Server base URL with its scheme, e.g. `https://androidmod.site` |
 | `CRAWLER_SECRET` | artifacts | Must equal the server's `CRAWLER_SECRET` |
 | `ARTIFACTS_DIR` | artifacts | State directory, default `~/.local/share/androidmod-crawler` |
 | `ALERT_EMAIL_TO` | artifacts | Recipient of alert emails; no email is sent when unset |
@@ -51,10 +58,12 @@ The SMTP names match PatchingSite's server, so one `.env` can serve both. Alert 
       <package>/
         state.json
         apks/<sha256>.apk           # the newest 3 downloads are kept
+        last_crash.txt              # the last unexpected error alerted, removed by a clean run
 
 `state.json` holds the `etag`, `last_modified` and `length` of the last download (to skip unchanged
-downloads), a `kept` list and `alerted`. Each `kept` entry has `apk_sha256`, `path`, `version_code`,
-`downloaded_at`, `processed_with` (the patcher version that processed it), `posted` and `last_error`.
+downloads), a `kept` list, `alerted` and `failing` (when each ongoing failure streak started). Each
+`kept` entry has `apk_sha256`, `path`, `version_code`, `downloaded_at`, `processed_with` (the patcher
+version that processed it), `posted` and `last_error`.
 
 A new `PATCHER_VERSION` reprocesses the kept APKs automatically.
 
