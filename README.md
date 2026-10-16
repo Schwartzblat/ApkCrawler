@@ -55,6 +55,7 @@ The SMTP names match PatchingSite's server, so one `.env` can serve both. Alert 
     $ARTIFACTS_DIR/
       .lock                         # one run at a time
       alerts.log                    # every alert, also when email is off
+      tmp/                          # the patcher's work dirs, cleared at the start of each run
       <package>/
         state.json
         apks/<sha256>.apk           # the newest 3 downloads are kept
@@ -65,7 +66,10 @@ downloads), a `kept` list, `alerted` and `failing` (when each ongoing failure st
 `kept` entry has `apk_sha256`, `path`, `version_code`, `downloaded_at`, `processed_with` (the patcher
 version that processed it), `posted` and `last_error`.
 
-A new `PATCHER_VERSION` reprocesses the kept APKs automatically.
+A new `PATCHER_VERSION` reprocesses the kept APKs automatically. Files in `apks/` that no `kept` entry
+names (partial downloads, an APK whose run was killed before saving `state.json`) are deleted on the next
+run. The patcher runs with a 10 minute timeout and without `CRAWLER_SECRET`, `BUNDLE_UPLOAD_SECRET`,
+`SMTP_PASSWORD`, `KEYSTORE_PASSWORD` and `KEY_PASSWORD` in its environment.
 
 ### Failures
 

@@ -257,12 +257,34 @@ def test_crash_alert_mentions_retry_flag(env):
 
 
 def test_second_run_exits_when_locked(env, capsys):
-    env.dir.mkdir(parents=True)
+    stale = env.dir / 'tmp' / 'work-of-the-other-run'
+    stale.mkdir(parents=True)
     with open(env.dir / '.lock', 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         env.run()
     assert env.http.head_count == 0 and env.http.get_count == 0 and not calls(env.patcher)
     assert 'lock' in capsys.readouterr().out
+    assert stale.exists()  # only the lock holder clears tmp/
+
+
+def test_leftover_files_in_apks_are_removed(env):
+    env.run()
+    apks = env.dir / 'com.fake' / 'apks'
+    [kept] = env.state().kept
+    (apks / '.download-abc123.part').write_bytes(b'partial')
+    (apks / ('ff' * 32 + '.apk')).write_bytes(APK)  # downloaded, but the run died before saving state
+    env.run()
+    assert [p.name for p in apks.iterdir()] == [kept.apk_sha256 + '.apk']
+
+
+def test_runner_work_dirs_live_under_artifacts_tmp_and_are_cleared(env):
+    stale = env.dir / 'tmp' / 'killed-run'
+    stale.mkdir(parents=True)
+    (stale / 'record.json').write_text('{}')
+    env.run()
+    [call] = calls(env.patcher)
+    assert call['out'].startswith(str(env.dir / 'tmp') + '/')
+    assert list((env.dir / 'tmp').iterdir()) == []
 
 
 # --- failures that persist: one alert after an hour, cleared by recovery ---

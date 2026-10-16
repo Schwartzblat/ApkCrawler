@@ -1,3 +1,4 @@
+import inspect
 import os
 import tempfile
 
@@ -101,3 +102,31 @@ def test_behavior_can_change_between_runs(tmp_path, tmproot, apk):
     set_behavior(d, exit=3, record=SAMPLE_RECORD)
     assert run_artifactory_only(tmp_path, APP, apk)[1] is False
     assert len(calls(d)) == 2
+
+
+def test_default_timeout_fits_three_runs_in_the_unit_timeout():
+    assert inspect.signature(run_artifactory_only).parameters['timeout'].default == 600
+
+
+SECRETS = ('CRAWLER_SECRET', 'BUNDLE_UPLOAD_SECRET', 'SMTP_PASSWORD', 'KEYSTORE_PASSWORD', 'KEY_PASSWORD')
+
+
+def test_patcher_runs_without_the_secrets(tmp_path, tmproot, apk, monkeypatch):
+    for name in SECRETS:
+        monkeypatch.setenv(name, 'value-not-for-the-patcher')
+    monkeypatch.setenv('CRAWLER_VISIBLE', '1')
+    d = make_fake_patcher(tmp_path, 'FakePatcher')
+    run_artifactory_only(tmp_path, APP, apk)
+    (call,) = calls(d)
+    assert not set(SECRETS) & set(call['env_names'])
+    assert 'CRAWLER_VISIBLE' in call['env_names'] and 'PATH' in call['env_names']
+    assert os.environ['CRAWLER_SECRET'] == 'value-not-for-the-patcher'  # the crawler's own env is untouched
+
+
+def test_work_dir_lives_under_work_root(tmp_path, tmproot, apk):
+    d = make_fake_patcher(tmp_path, 'FakePatcher')
+    work_root = tmp_path / 'artifacts' / 'tmp'
+    run_artifactory_only(tmp_path, APP, apk, work_root=work_root)
+    (call,) = calls(d)
+    assert call['out'].startswith(str(work_root) + os.sep) and call['temp'].startswith(str(work_root) + os.sep)
+    assert list(work_root.iterdir()) == [] and not os.listdir(tmproot)

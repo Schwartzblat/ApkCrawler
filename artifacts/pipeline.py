@@ -1,10 +1,11 @@
 """The artifacts pipeline: new whatsapp.com APKs -> signature finders -> version records on the server."""
 import fcntl
 import os
+import shutil
 import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 import requests
 
@@ -63,10 +64,10 @@ def _fetch_new(app: AppConfig, artifacts_dir: Path, state: AppState) -> None:
 
 
 def _process(app: AppConfig, patchers_dir: Path, server_url: str, secret: str, state: AppState,
-             kept: Kept, current: str) -> None:
+             kept: Kept, current: str, work_root: Optional[Path] = None) -> None:
     sha = kept.apk_sha256
     try:
-        record, supported = run_artifactory_only(patchers_dir, app, Path(kept.path))
+        record, supported = run_artifactory_only(patchers_dir, app, Path(kept.path), work_root=work_root)
     except RunnerError as error:
         kept.last_error, kept.processed_with = str(error), current
         print(f'{app.name}: patcher failed on {sha[:12]}: {(str(error).splitlines() or [""])[0]}')
@@ -113,9 +114,28 @@ def _prune(state: AppState, keep: int) -> None:
     del state.kept[keep:]
 
 
+def _work_root(artifacts_dir: Path) -> Path:
+    """Where the runner makes its work dirs; a killed run's are cleared by the next one."""
+    return artifacts_dir / 'tmp'
+
+
+def _remove_leftovers(app: AppConfig, artifacts_dir: Path, state: AppState) -> None:
+    """Delete the files in apks/ that no kept entry names: partial downloads, and APKs of a run that
+    died before saving state.json."""
+    apks = artifacts_dir / app.package_name / 'apks'
+    if not apks.is_dir():
+        return
+    referenced = {Path(kept.path).name for kept in state.kept}
+    for entry in apks.iterdir():
+        if entry.name not in referenced and entry.is_file():
+            entry.unlink()
+            print(f'{app.name}: removed leftover {entry.name}')
+
+
 def _run_app(app: AppConfig, patchers_dir: Path, artifacts_dir: Path, server_url: str, secret: str,
              keep: int, retry_failed: bool) -> None:
     state = load(artifacts_dir, app.package_name)
+    _remove_leftovers(app, artifacts_dir, state)
     try:
         current = patcher_version(patchers_dir, app.patcher_name)
     except RunnerError as error:
@@ -135,7 +155,8 @@ def _run_app(app: AppConfig, patchers_dir: Path, artifacts_dir: Path, server_url
     save(artifacts_dir, app.package_name, state)
     for kept in sorted(state.kept, key=lambda k: k.downloaded_at, reverse=True):
         if kept.processed_with != current or (not kept.posted and kept.last_error is None):
-            _process(app, patchers_dir, server_url, secret, state, kept, current)
+            _process(app, patchers_dir, server_url, secret, state, kept, current,
+                     work_root=_work_root(artifacts_dir))
             save(artifacts_dir, app.package_name, state)
 
 
@@ -175,6 +196,7 @@ def run(apps: Iterable[AppConfig], patchers_dir: Path, artifacts_dir: Path, serv
         except BlockingIOError:
             print('Another artifacts run holds the lock, exiting')
             return
+        shutil.rmtree(_work_root(artifacts_dir), ignore_errors=True)
         for app in apps:
             if 'artifacts' in app.pipelines and app.direct_url:
                 try:

@@ -17,7 +17,7 @@ ap.add_argument("-t", dest="temp", required=True)
 args = ap.parse_args()
 with open(os.path.join(here, "calls.jsonl"), "a") as f:
     f.write(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd(), "temp_existed": os.path.exists(args.temp),
-                        "out": args.out, "temp": args.temp}) + "\\n")
+                        "out": args.out, "temp": args.temp, "env_names": sorted(os.environ)}) + "\\n")
 with open(os.path.join(here, "behavior.json")) as f:
     b = json.load(f)
 for line in b.get("print_lines", []):
