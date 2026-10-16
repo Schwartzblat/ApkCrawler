@@ -69,6 +69,7 @@ def _process(app: AppConfig, patchers_dir: Path, server_url: str, secret: str, s
         record, supported = run_artifactory_only(patchers_dir, app, Path(kept.path))
     except RunnerError as error:
         kept.last_error, kept.processed_with = str(error), current
+        print(f'{app.name}: patcher failed on {sha[:12]}: {(str(error).splitlines() or [""])[0]}')
         alerts.once(state, f'run:{sha}:{current}', f'{app.name}: patcher {current} failed on {sha[:12]}',
                     f'{error}\n\n{RETRY_HINT}')
         return
@@ -83,6 +84,7 @@ def _process(app: AppConfig, patchers_dir: Path, server_url: str, secret: str, s
         else:
             _end_streak(state, f'post:{sha}')  # the server answered; the parked APK alerts below
             kept.last_error = str(error)
+            print(f'{app.name}: server rejected {sha[:12]}: {error}')
             alerts.once(state, f'post:{sha}:{current}',
                         f'{app.name}: server rejected the record for {sha[:12]}', f'{error}\n\n{RETRY_HINT}')
         return
@@ -124,7 +126,10 @@ def _run_app(app: AppConfig, patchers_dir: Path, artifacts_dir: Path, server_url
     _end_streak(state, 'patcher_version')
     if retry_failed:
         for kept in state.kept:
-            kept.last_error = None  # parked by a 4xx or a crash: try again on this run
+            if kept.last_error is not None:  # parked by a 4xx or a crash: try again on this run
+                kept.last_error = None
+                for kind in ('run', 'post'):  # and alert again if it fails again
+                    state.alerted.pop(f'{kind}:{kept.apk_sha256}:{current}', None)
     _fetch_new(app, artifacts_dir, state)
     _prune(state, keep)
     save(artifacts_dir, app.package_name, state)

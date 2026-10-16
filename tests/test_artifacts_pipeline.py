@@ -219,6 +219,36 @@ def test_parked_4xx_retried_only_with_retry_failed(env):
     assert kept.posted and kept.last_error is None
 
 
+def retry_failed(env):
+    pipeline.run([env.app], env.patcher.parent, env.dir, env.http.base_url, 'sekret', retry_failed=True)
+
+
+def test_retry_failed_rejected_again_prints_and_alerts_again(env, capsys):
+    env.http.post_responses = [(401, {'detail': 'bad token'})]
+    env.run()
+    sha = env.state().kept[0].apk_sha256
+    line = f'Fake: server rejected {sha[:12]}: server rejected record (401): bad token'
+    assert line in capsys.readouterr().out
+    assert len(env.alerts()) == 1
+    retry_failed(env)
+    assert line in capsys.readouterr().out
+    assert len(env.alerts()) == 2 and len(env.http.posts) == 2
+    assert env.state().kept[0].last_error  # parked again
+    env.run()
+    assert len(env.alerts()) == 2 and len(env.http.posts) == 2
+
+
+def test_retry_failed_crash_again_prints_and_alerts_again(env, capsys):
+    set_behavior(env.patcher, exit=1, record=None, print_lines=['boom'])
+    env.run()
+    sha = env.state().kept[0].apk_sha256
+    line = f'Fake: patcher failed on {sha[:12]}: FakePatcher exited 1\n'
+    assert line in capsys.readouterr().out
+    retry_failed(env)
+    assert line in capsys.readouterr().out
+    assert len(env.alerts()) == 2 and len(calls(env.patcher)) == 2
+
+
 def test_crash_alert_mentions_retry_flag(env):
     set_behavior(env.patcher, exit=1, record=None)
     env.run()

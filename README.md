@@ -75,6 +75,8 @@ so a broken APK does not email every 15 minutes. After fixing the cause (patcher
 
     ./run_crawler.sh --pipeline artifacts --retry-failed
 
+If the retry fails again, it prints the error and alerts again.
+
 ## Scheduling the artifacts pipeline
 
 `deploy/` holds a systemd user unit pair that runs the pipeline every 15 minutes (`Persistent=true`
