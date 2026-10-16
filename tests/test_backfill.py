@@ -120,7 +120,7 @@ def test_backfill_flag_reaches_the_run(monkeypatch):
     seen = {}
     monkeypatch.setattr(crawler_module, 'run_over_crawlers', lambda remote=None, backfill=0: seen.update(
         remote=remote, backfill=backfill))
-    monkeypatch.setattr(crawler_module, 'check_patchers', lambda apps: None)
+    monkeypatch.setattr(crawler_module, 'check_patchers', lambda apps, need_paywall=True: None)
     monkeypatch.setattr(sys, 'argv', ['crawler.py', '--backfill', '5'])
     crawler_module.main()
     assert seen == {'remote': None, 'backfill': 5}

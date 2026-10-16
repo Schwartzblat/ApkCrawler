@@ -2,3 +2,4 @@ requests
 packaging
 tqdm
 zendriver
+# Stitch >= 1.5.0, installed editable from the monorepo: pip install -e ../../utils/Stitch

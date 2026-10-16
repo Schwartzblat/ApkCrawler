@@ -24,6 +24,7 @@ APPS_PATH = Path('/opt/patched')
 # a <patcher_name>/main.py per app, and the PatchPaywall passed to every patcher
 PATCHERS_DIR = 'PATCHERS_DIR'
 PAYWALL_PATH = 'PAYWALL_PATH'
+PIPELINES = ('build', 'artifacts', 'all')
 
 
 def env_path(variable: str) -> Path:
@@ -33,12 +34,14 @@ def env_path(variable: str) -> Path:
     return Path(value).expanduser().absolute()
 
 
-def check_patchers(apps: Iterable[AppConfig]) -> None:
-    """Fails before anything is downloaded when a patcher an app names or the paywall is missing."""
-    patchers_dir, paywall = env_path(PATCHERS_DIR), env_path(PAYWALL_PATH)
+def check_patchers(apps: Iterable[AppConfig], need_paywall: bool = True) -> None:
+    """Fails before anything is downloaded when a patcher an app names is missing, or the paywall
+    when need_paywall (only the build pipeline passes it to the patchers)."""
+    patchers_dir = env_path(PATCHERS_DIR)
+    paywall = env_path(PAYWALL_PATH) if need_paywall else None
     missing = [patchers_dir / app.patcher_name / 'main.py' for app in apps
                if app.patcher_name and not (patchers_dir / app.patcher_name / 'main.py').is_file()]
-    if not paywall.exists():
+    if paywall and not paywall.exists():
         missing.append(paywall)
     if missing:
         raise ValueError(f'missing {", ".join(map(str, missing))}')
@@ -120,8 +123,12 @@ def fetch(app: AppConfig, version: Version, sources: List[Crawler]) -> Optional[
     return None
 
 
+def apps_in(pipeline: str) -> List[AppConfig]:
+    return [app for app in APPS if pipeline in app.pipelines]
+
+
 def run_over_crawlers(remote: Optional[str] = None, backfill: int = 0):
-    for app in APPS:
+    for app in apps_in('build'):
         local_versions = get_local_versions(app)
         print(f'Latest version for {app.name}: {max(local_versions, default=Version("0.0.0"))}')
         sources: Dict[Version, List[Crawler]] = {}
@@ -153,7 +160,7 @@ def positive(value: str) -> int:
     return number
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='Downloads new versions of the apps and patches them',
                                      epilog=f'Patching needs {PATCHERS_DIR}, the directory holding the patchers,'
                                             f' and {PAYWALL_PATH}, the PatchPaywall checkout')
@@ -161,12 +168,26 @@ def main():
                                                f' path defaults to {APPS_PATH}')
     parser.add_argument('-b', '--backfill', type=positive, metavar='N', default=0,
                         help='Also download the missing ones among each app\'s newest N releases')
+    parser.add_argument('--pipeline', choices=PIPELINES, default='build',
+                        help='build: download and patch new releases (default); artifacts: record'
+                             ' signature-finder results; all: both')
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
+    runs_build = args.pipeline in ('build', 'all')
+    runs_artifacts = args.pipeline in ('artifacts', 'all')
     try:
-        check_patchers(APPS)
+        check_patchers((apps_in('build') if runs_build else []) + (apps_in('artifacts') if runs_artifacts else []),
+                       need_paywall=runs_build)
     except ValueError as error:
         parser.error(str(error))
-    run_over_crawlers(remote=args.remote, backfill=args.backfill)
+    if runs_build:
+        run_over_crawlers(remote=args.remote, backfill=args.backfill)
+    if runs_artifacts:
+        print('The artifacts pipeline is not wired yet')
 
 
 if __name__ == '__main__':
