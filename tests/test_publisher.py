@@ -94,3 +94,28 @@ def test_secret_not_in_errors():
             post(http, attempts=2)
     for e in (ei.value, ei2.value):
         assert SECRET not in str(e) and SECRET not in repr(e)
+
+
+@pytest.mark.parametrize('status', [301, 302, 307, 308])
+def test_redirect_is_not_followed_and_not_retried(status):
+    with FakeHttp() as target, FakeHttp() as http:
+        location = target.base_url + '/api/internal/records'
+        http.post_responses = [(status, {}, {'Location': location})]
+        with pytest.raises(PublishError) as ei:
+            post(http)
+        assert len(http.posts) == 1
+        assert target.posts == [] and target.requests == []  # the token never reaches the target
+    assert ei.value.retryable is False and ei.value.status == status
+    assert location in str(ei.value) and 'PATCH_SERVER_URL' in str(ei.value)
+
+
+@pytest.mark.parametrize('status', [408, 429])
+def test_408_and_429_are_retried(status):
+    with FakeHttp() as http:
+        http.post_responses = [(status, {'detail': 'slow down'}), (200, {'revision': 5})]
+        assert post(http) == 5
+        assert len(http.posts) == 2
+        http.post_responses = [(status, {'detail': 'slow down'})]
+        with pytest.raises(PublishError) as ei:
+            post(http, attempts=2)
+    assert ei.value.retryable is True and ei.value.status == status

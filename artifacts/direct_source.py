@@ -10,6 +10,14 @@ import requests
 
 from artifacts.state import AppState
 
+# A compressed transfer would be decoded and then fail the Content-Length check
+_HEADERS = {'Accept-Encoding': 'identity'}
+_APK_MAGIC = b'PK\x03\x04'  # an APK is a zip: it starts with a local file header
+
+
+class NotAnApk(Exception):
+    """The URL served something other than an APK, e.g. an HTML interstitial or a bot check."""
+
 
 @dataclass
 class Probe:
@@ -28,7 +36,7 @@ def _probe_from(response) -> Probe:
 
 
 def probe(url: str, timeout=30) -> Probe:
-    response = requests.head(url, allow_redirects=True, timeout=timeout)
+    response = requests.head(url, allow_redirects=True, timeout=timeout, headers=_HEADERS)
     response.raise_for_status()
     return _probe_from(response)
 
@@ -42,24 +50,31 @@ def unchanged(probe: Probe, state: AppState) -> bool:
 
 
 def download(url: str, dest_dir: Path, timeout=600) -> Tuple[Path, str, Probe]:
-    """Stream url into dest_dir/<sha256>.apk. The Probe describes this GET's own headers."""
+    """Stream url into dest_dir/<sha256>.apk. The Probe describes this GET's own headers.
+    Raises NotAnApk when the body is not a zip (an interstitial page, say)."""
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix='.download-', suffix='.part', dir=dest_dir)
     try:
         sha = hashlib.sha256()
         written = 0
+        start = b''
         with os.fdopen(fd, 'wb') as f, \
-                requests.get(url, stream=True, allow_redirects=True, timeout=timeout) as response:
+                requests.get(url, stream=True, allow_redirects=True, timeout=timeout,
+                             headers=_HEADERS) as response:
             response.raise_for_status()
             got = _probe_from(response)
             for chunk in response.iter_content(chunk_size=1 << 20):
                 f.write(chunk)
                 sha.update(chunk)
                 written += len(chunk)
+                if len(start) < len(_APK_MAGIC):
+                    start += chunk[:len(_APK_MAGIC) - len(start)]
         if got.length is not None and written != got.length:
             raise requests.exceptions.ChunkedEncodingError(
                 'incomplete download: %d of %d bytes' % (written, got.length))
+        if start != _APK_MAGIC:
+            raise NotAnApk('not an APK: the body starts with %r' % start)
         digest = sha.hexdigest()
         final = dest_dir / (digest + '.apk')
         os.replace(tmp_name, final)

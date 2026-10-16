@@ -3,11 +3,12 @@ import hashlib
 import pytest
 import requests
 
-from artifacts.direct_source import Probe, download, probe, unchanged
+from artifacts.direct_source import NotAnApk, Probe, download, probe, unchanged
 from artifacts.state import AppState
 from httpfake import FakeHttp
 
 LM = 'Mon, 01 Jan 2024 00:00:00 GMT'
+APK = b'PK\x03\x04'  # every APK is a zip: it starts with a local file header
 
 
 def st(etag=None, lm=None, length=None):
@@ -49,7 +50,7 @@ def test_unchanged_probe_etag_but_state_none():
 
 
 def test_download_writes_sha_named_file(tmp_path):
-    body = b'apk-bytes' * 1000
+    body = APK + b'apk-bytes' * 1000
     sha = hashlib.sha256(body).hexdigest()
     dest = tmp_path / 'new' / 'apks'
     with FakeHttp(body=body, etag='"e"') as http:
@@ -61,7 +62,7 @@ def test_download_writes_sha_named_file(tmp_path):
 
 
 def test_download_existing_file_replaced(tmp_path):
-    body = b'same'
+    body = APK + b'same'
     sha = hashlib.sha256(body).hexdigest()
     (tmp_path / (sha + '.apk')).write_bytes(body)
     with FakeHttp(body=body) as http:
@@ -72,16 +73,32 @@ def test_download_existing_file_replaced(tmp_path):
 
 def test_download_returns_probe_from_get_headers(tmp_path):
     with FakeHttp(body=b'old', etag='"head"', last_modified='HEAD-LM') as http:
-        http.get_body = b'newer-bytes'
+        http.get_body = APK + b'newer-bytes'
         http.get_etag = '"get"'
         http.get_last_modified = LM
         _, _, p = download(http.url, tmp_path)
-    assert p == Probe('"get"', LM, len(b'newer-bytes'))
+    assert p == Probe('"get"', LM, len(APK + b'newer-bytes'))
 
 
 def test_download_dropped_connection_leaves_nothing(tmp_path):
-    with FakeHttp(body=b'x' * 100000) as http:
+    with FakeHttp(body=APK + b'x' * 100000) as http:
         http.drop_after = 1000
         with pytest.raises(requests.RequestException):
+            download(http.url, tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_probe_and_download_ask_for_the_bytes_unencoded(tmp_path):
+    with FakeHttp(body=APK + b'x') as http:
+        probe(http.url)
+        download(http.url, tmp_path)
+    assert [r['method'] for r in http.requests] == ['HEAD', 'GET']
+    assert all(r['headers'].get('accept-encoding') == 'identity' for r in http.requests)
+
+
+@pytest.mark.parametrize('body', [b'<html>Checking your browser</html>', b'PK', b''])
+def test_download_rejects_a_body_that_is_not_an_apk(tmp_path, body):
+    with FakeHttp(body=body) as http:
+        with pytest.raises(NotAnApk):
             download(http.url, tmp_path)
     assert list(tmp_path.iterdir()) == []

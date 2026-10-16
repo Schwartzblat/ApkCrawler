@@ -10,7 +10,7 @@ import requests
 
 from apps import AppConfig
 from artifacts import alerts
-from artifacts.direct_source import download, probe, unchanged
+from artifacts.direct_source import NotAnApk, download, probe, unchanged
 from artifacts.publisher import PublishError, post_record
 from artifacts.runner import RunnerError, patcher_version, run_artifactory_only
 from artifacts.state import AppState, Kept, load, save
@@ -50,7 +50,7 @@ def _fetch_new(app: AppConfig, artifacts_dir: Path, state: AppState) -> None:
             return
         print(f'{app.name}: new release, downloading')
         path, sha, got = download(app.direct_url, artifacts_dir / app.package_name / 'apks')
-    except (requests.RequestException, OSError) as error:
+    except (requests.RequestException, OSError, NotAnApk) as error:
         print(f'{app.name}: cannot fetch {app.direct_url} ({type(error).__name__}), will retry next run')
         _failed(app, state, 'fetch', 'fetching the APK', f'{type(error).__name__}: {error}')
         return

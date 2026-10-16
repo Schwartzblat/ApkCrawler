@@ -6,7 +6,8 @@
         http.head_count, http.get_count
 
 POST records path/headers/body in `posts` and answers from the scripted
-`post_responses` list of (status, json_body), repeating the last entry.
+`post_responses` list of (status, json_body) or (status, json_body, headers),
+repeating the last entry. HEAD and GET record method and headers in `requests`.
 
 HEAD and GET answer from the same config unless the get_* overrides are set,
 which lets a test make GET differ from HEAD.
@@ -31,6 +32,8 @@ class FakeHttp:
         self.drop_after = None
         self.head_count = 0
         self.get_count = 0
+        # One dict per HEAD/GET: method, headers (lower-cased names).
+        self.requests = []
         # POST: scripted (status, json_body) responses; the last one repeats.
         self.post_responses = [(200, {})]
         # One dict per POST: path, headers (lower-cased names), body (bytes).
@@ -56,6 +59,8 @@ class FakeHttp:
                 pass
 
             def _respond(self, is_get):
+                fake.requests.append({'method': 'GET' if is_get else 'HEAD',
+                                      'headers': {k.lower(): v for k, v in self.headers.items()}})
                 if is_get:
                     fake.get_count += 1
                 else:
@@ -88,9 +93,11 @@ class FakeHttp:
                     'body': self.rfile.read(n),
                 })
                 i = min(len(fake.posts), len(fake.post_responses)) - 1
-                status, payload = fake.post_responses[i]
+                status, payload, *extra = fake.post_responses[i]
                 data = json.dumps(payload).encode()
                 self.send_response(status)
+                for name, value in (extra[0] if extra else {}).items():
+                    self.send_header(name, value)
                 self.send_header('Content-Type', 'application/json')
                 self.send_header('Content-Length', str(len(data)))
                 self.send_header('Connection', 'close')

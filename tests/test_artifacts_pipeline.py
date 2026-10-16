@@ -14,6 +14,7 @@ from fakepatcher import SAMPLE_RECORD, calls, make_fake_patcher, set_behavior, s
 from httpfake import FakeHttp
 
 OK = (200, {'revision': 7})
+APK = b'PK\x03\x04'  # every APK is a zip: it starts with a local file header
 DEAD_URL = 'http://127.0.0.1:1/app.apk'  # nothing listens there
 T0 = datetime(2026, 10, 17, tzinfo=timezone.utc)
 
@@ -25,7 +26,7 @@ def env(tmp_path, monkeypatch):
     for name in ('ALERT_EMAIL_TO', 'SMTP_PASSWORD'):
         monkeypatch.delenv(name, raising=False)
     patcher = make_fake_patcher(tmp_path / 'patchers', 'FakePatcher')
-    with FakeHttp(body=b'apk-one', etag='"E1"') as http:
+    with FakeHttp(body=APK + b'apk-one', etag='"E1"') as http:
         http.post_responses = [OK]
         app = AppConfig(name='Fake', package_name='com.fake', patcher_name='FakePatcher',
                         pipelines=frozenset({'artifacts'}), direct_url=http.url, direct_source='fake.test')
@@ -72,7 +73,7 @@ def test_new_apk_is_processed_and_posted(env):
     [kept] = state.kept
     assert (kept.posted, kept.processed_with, kept.version_code, kept.last_error) == (True, '3.0.0', 1, None)
     assert state.etag == '"E1"'
-    assert (env.dir / 'com.fake' / 'apks' / (kept.apk_sha256 + '.apk')).read_bytes() == b'apk-one'
+    assert (env.dir / 'com.fake' / 'apks' / (kept.apk_sha256 + '.apk')).read_bytes() == APK + b'apk-one'
 
 
 def test_unchanged_probe_does_nothing(env):
@@ -95,12 +96,12 @@ def test_same_bytes_new_etag_not_reprocessed(env):
 
 def test_state_follows_downloaded_bytes(env):
     import hashlib
-    env.http.get_body = b'different bytes'
+    env.http.get_body = APK + b'different bytes'
     env.http.get_etag = '"E2"'
     env.http.get_length = None
     env.run()
     state = env.state()
-    assert state.kept[0].apk_sha256 == hashlib.sha256(b'different bytes').hexdigest()
+    assert state.kept[0].apk_sha256 == hashlib.sha256(APK + b'different bytes').hexdigest()
     assert state.etag == '"E2"'
 
 
@@ -110,7 +111,7 @@ def test_unsupported_record_alerts_once(env):
     assert len(env.http.posts) == 1
     assert len(env.alerts()) == 1 and '2.25.1.1' in env.alerts()[0] and 'ads' in env.alerts()[0]
     env.http.etag = '"E2"'
-    env.http.body = b'apk-two'
+    env.http.body = APK + b'apk-two'
     env.run()
     assert len(env.alerts()) == 2  # the second APK is a different record
     env.run()
@@ -175,7 +176,7 @@ def test_probe_failure_falls_through_to_kept(env, capsys):
 
 
 def test_patcher_version_change_reprocesses_kept_apks(env):
-    for body, etag in ((b'a', '"1"'), (b'b', '"2"')):
+    for body, etag in ((APK + b'a', '"1"'), (APK + b'b', '"2"')):
         env.http.body, env.http.etag = body, etag
         env.run()
     set_version(env.patcher, '4.0.0')
@@ -193,9 +194,9 @@ def test_patcher_version_change_reprocesses_kept_apks(env):
 
 def test_keeps_only_newest_three(env):
     import hashlib
-    shas = [hashlib.sha256(b'apk%d' % i).hexdigest() for i in range(5)]
+    shas = [hashlib.sha256(APK + b'apk%d' % i).hexdigest() for i in range(5)]
     for i in range(5):
-        env.http.body, env.http.etag = b'apk%d' % i, '"%d"' % i
+        env.http.body, env.http.etag = APK + b'apk%d' % i, '"%d"' % i
         env.run()
     state = env.state()
     assert {k.apk_sha256 for k in state.kept} == set(shas[2:])
@@ -313,6 +314,15 @@ def test_download_failure_is_a_fetch_failure(env, clock):
     clock.advance(hours=1)
     env.run()
     assert len(env.alerts()) == 1
+
+
+def test_a_body_that_is_not_an_apk_is_a_fetch_failure(env, capsys):
+    env.http.body = b'<html>Checking your browser</html>'
+    env.run()
+    assert 'cannot fetch' in capsys.readouterr().out
+    state = env.state()
+    assert 'fetch' in state.failing and not state.kept and state.etag is None
+    assert list((env.dir / 'com.fake' / 'apks').iterdir()) == [] and not calls(env.patcher)
 
 
 def test_server_unavailable_for_an_hour_alerts_once(env, clock, no_backoff):
