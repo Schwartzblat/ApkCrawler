@@ -1,0 +1,99 @@
+# Crawler
+
+Two independent pipelines, selected with `--pipeline {build,artifacts,all}` (default `build`).
+
+## Pipelines
+
+**build** (default, run by hand): downloads new versions of the apps in `apps.py` from Google Play, APKPure
+and APKMirror into `/opt/patched` and patches them with `--paywall`. An app listing only `build` in its
+`pipelines` goes through this one.
+
+    ./run_crawler.sh                      # build pipeline
+    ./run_crawler.sh -r user@server[:path]  # also upload the patched APKs over SSH
+    ./run_crawler.sh -b N                 # also fetch the missing ones among each app's newest N releases
+
+**artifacts** (scheduled, see below): for each app whose `pipelines` contains `artifacts` (today WhatsApp),
+polls the app's direct URL (`direct_url` in `apps.py`), and when the APK changed runs the patcher's
+signature finders (`main.py --artifactory-only`). The resulting version record is posted to the server
+(`POST $PATCH_SERVER_URL/api/internal/records`, header `X-Internal-Token`). Problems send one alert
+email and are appended to `alerts.log`.
+
+    ./run_crawler.sh --pipeline artifacts
+    ./run_crawler.sh --pipeline artifacts --retry-failed   # see "Failures" below
+    ./run_crawler.sh --pipeline all                         # both
+
+## Configuration
+
+`run_crawler.sh` changes to its own directory, sources `.env` next to it (exported to the crawler) and
+activates `.venv`. `.env` holds secrets: `chmod 600 .env`. Never commit it.
+
+| Variable | Pipeline | Meaning |
+| --- | --- | --- |
+| `PATCHERS_DIR` | both | Directory holding the patchers (`<PatcherName>/main.py`) |
+| `PAYWALL_PATH` | build | The PatchPaywall checkout passed to the patchers |
+| `GOOGLE_API_KEY` | build, optional | Passed to the downloader with `-g` |
+| `PATCH_SERVER_URL` | artifacts | Server base URL, e.g. `https://androidmod.site` |
+| `CRAWLER_SECRET` | artifacts | Must equal the server's `CRAWLER_SECRET` |
+| `ARTIFACTS_DIR` | artifacts | State directory, default `~/.local/share/androidmod-crawler` |
+| `ALERT_EMAIL_TO` | artifacts | Recipient of alert emails; no email is sent when unset |
+| `SMTP_HOST` | artifacts | Default `smtp.gmail.com` |
+| `SMTP_PORT` | artifacts | `465` (default) uses implicit TLS, any other port uses STARTTLS |
+| `SMTP_USERNAME`, `SMTP_PASSWORD`, `MAIL_FROM` | artifacts | SMTP login and sender (`MAIL_FROM` defaults to the username) |
+
+The SMTP names match PatchingSite's server, so one `.env` can serve both. Alert emails need
+`ALERT_EMAIL_TO`, `SMTP_USERNAME` and `SMTP_PASSWORD`; otherwise alerts only go to `alerts.log`.
+
+## State (artifacts pipeline)
+
+    $ARTIFACTS_DIR/
+      .lock                         # one run at a time
+      alerts.log                    # every alert, also when email is off
+      <package>/
+        state.json
+        apks/<sha256>.apk           # the newest 3 downloads are kept
+
+`state.json` holds the `etag`, `last_modified` and `length` of the last download (to skip unchanged
+downloads), a `kept` list and `alerted`. Each `kept` entry has `apk_sha256`, `path`, `version_code`,
+`downloaded_at`, `processed_with` (the patcher version that processed it), `posted` and `last_error`.
+
+A new `PATCHER_VERSION` reprocesses the kept APKs automatically.
+
+### Failures
+
+A patcher crash or a 4xx from the server alerts once and parks that APK until the next patcher release,
+so a broken APK does not email every 15 minutes. After fixing the cause (patcher bug, wrong
+`CRAWLER_SECRET`, ...), retry immediately:
+
+    ./run_crawler.sh --pipeline artifacts --retry-failed
+
+## Scheduling the artifacts pipeline
+
+`deploy/` holds a systemd user unit pair that runs the pipeline every 15 minutes (`Persistent=true`
+catches up after downtime, `RandomizedDelaySec=60`, 45 minute timeout). No root needed.
+
+`ExecStart` in `deploy/crawler-artifacts.service` is `%h/PatchingMonorepo/tools/crawler/run_crawler.sh`.
+**Edit it if the checkout lives elsewhere.**
+
+    mkdir -p ~/.config/systemd/user
+    cp deploy/crawler-artifacts.service deploy/crawler-artifacts.timer ~/.config/systemd/user/
+    systemctl --user daemon-reload
+    systemctl --user enable --now crawler-artifacts.timer
+    loginctl enable-linger "$USER"      # run the timer without a login session
+
+Check on it:
+
+    systemctl --user list-timers crawler-artifacts.timer
+    systemctl --user start crawler-artifacts.service    # run once now
+    journalctl --user -u crawler-artifacts
+
+## Launch-day step (not done yet)
+
+While WhatsApp is still also built by the crawler, subscribers receive crawler-built WhatsApp. On launch of
+on-device patching:
+
+1. Remove `"build"` from WhatsApp's `pipelines` in `apps.py` (leaving `frozenset({"artifacts"})`).
+2. Set the server's `ON_DEVICE_PACKAGES` to include `com.whatsapp`.
+
+## Tests
+
+    .venv/bin/python -m pytest -q
