@@ -6,6 +6,7 @@ from typing import Dict, Iterable, List, Optional, Set
 from packaging.version import InvalidVersion, Version
 import subprocess
 
+import artifacts.pipeline as artifacts_pipeline
 from apps import APPS, AppConfig
 from crawlers.crawler import Crawler
 from crawlers.apkmirror_downloader import APKMirrorCrawler
@@ -25,6 +26,11 @@ APPS_PATH = Path('/opt/patched')
 PATCHERS_DIR = 'PATCHERS_DIR'
 PAYWALL_PATH = 'PAYWALL_PATH'
 PIPELINES = ('build', 'artifacts', 'all')
+# Environment variables of the artifacts pipeline (ARTIFACTS_DIR is also read by artifacts.alerts)
+PATCH_SERVER_URL = 'PATCH_SERVER_URL'
+CRAWLER_SECRET = 'CRAWLER_SECRET'
+ARTIFACTS_DIR = 'ARTIFACTS_DIR'
+DEFAULT_ARTIFACTS_DIR = '~/.local/share/androidmod-crawler'
 
 
 def env_path(variable: str) -> Path:
@@ -179,15 +185,22 @@ def main():
     args = parser.parse_args()
     runs_build = args.pipeline in ('build', 'all')
     runs_artifacts = args.pipeline in ('artifacts', 'all')
+    if runs_artifacts:
+        for variable in (PATCH_SERVER_URL, CRAWLER_SECRET):
+            if not os.environ.get(variable):
+                parser.error(f'{variable} is not set')
+    apps = (apps_in('build') if runs_build else []) + (apps_in('artifacts') if runs_artifacts else [])
+    apps = list({app.package_name: app for app in apps}.values())
     try:
-        check_patchers((apps_in('build') if runs_build else []) + (apps_in('artifacts') if runs_artifacts else []),
-                       need_paywall=runs_build)
+        check_patchers(apps, need_paywall=runs_build)
     except ValueError as error:
         parser.error(str(error))
     if runs_build:
         run_over_crawlers(remote=args.remote, backfill=args.backfill)
     if runs_artifacts:
-        print('The artifacts pipeline is not wired yet')
+        artifacts_dir = Path(os.environ.get(ARTIFACTS_DIR) or DEFAULT_ARTIFACTS_DIR).expanduser().absolute()
+        artifacts_pipeline.run(apps_in('artifacts'), env_path(PATCHERS_DIR), artifacts_dir,
+                               os.environ[PATCH_SERVER_URL], os.environ[CRAWLER_SECRET])
 
 
 if __name__ == '__main__':
