@@ -15,8 +15,13 @@ and APKMirror into `/opt/patched` and patches them with `--paywall`. An app list
 **artifacts** (scheduled, see below): for each app whose `pipelines` contains `artifacts` (today WhatsApp),
 polls the app's direct URL (`direct_url` in `apps.py`), and when the APK changed runs the patcher's
 signature finders (`main.py --artifactory-only`). The resulting version record is posted to the server
-(`POST $PATCH_SERVER_URL/api/internal/records`, header `X-Internal-Token`). Every alert is an email
-(when configured) and a line in `alerts.log`; each problem alerts once:
+(`POST $PATCH_SERVER_URL/api/internal/records`, header `X-Internal-Token`).
+
+    ./run_crawler.sh --pipeline artifacts
+    ./run_crawler.sh --pipeline artifacts --retry-failed   # see "Failures" below
+    ./run_crawler.sh --pipeline all                         # both
+
+Every alert is an email (when configured) and a line in `alerts.log`; each problem alerts once:
 
 - A patcher crash, a rejected record and an unsupported record (or one with features off) alert at once.
 - Failures every run retries by itself (fetching the APK, posting while the server is unavailable,
@@ -24,10 +29,6 @@ signature finders (`main.py --artifactory-only`). The resulting version record i
   streak, so the next outage alerts again.
 - An unexpected error in an app's processing (for example a corrupt `state.json`) prints a traceback,
   alerts once per distinct error and lets the other apps run; a clean run of that app re-arms it.
-
-    ./run_crawler.sh --pipeline artifacts
-    ./run_crawler.sh --pipeline artifacts --retry-failed   # see "Failures" below
-    ./run_crawler.sh --pipeline all                         # both
 
 ## Configuration
 
@@ -73,8 +74,9 @@ run. The patcher runs with a 10 minute timeout and without `CRAWLER_SECRET`, `BU
 
 ### Failures
 
-A patcher crash or a 4xx from the server alerts once and parks that APK until the next patcher release,
-so a broken APK does not email every 15 minutes. After fixing the cause (patcher bug, wrong
+A patcher crash, or a 4xx (other than 408 and 429, which are retried) or redirect from the server,
+alerts once and parks that APK until the next patcher release, so a broken APK does not email every 15
+minutes. Redirects are not followed: point `PATCH_SERVER_URL` at the final URL. After fixing the cause (patcher bug, wrong
 `CRAWLER_SECRET`, ...), retry immediately:
 
     ./run_crawler.sh --pipeline artifacts --retry-failed
