@@ -187,6 +187,8 @@ def main():
     args = parser.parse_args()
     runs_build = args.pipeline in ('build', 'all')
     runs_artifacts = args.pipeline in ('artifacts', 'all')
+    if args.retry_failed and not runs_artifacts:
+        parser.error('--retry-failed needs --pipeline artifacts or all')
     if runs_artifacts:
         for variable in (PATCH_SERVER_URL, CRAWLER_SECRET):
             if not os.environ.get(variable):

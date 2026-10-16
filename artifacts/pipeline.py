@@ -56,7 +56,9 @@ def _fetch_new(app: AppConfig, artifacts_dir: Path, state: AppState) -> None:
         _failed(app, state, 'fetch', 'fetching the APK', f'{type(error).__name__}: {error}')
         return
     _end_streak(state, 'fetch')
-    if not any(kept.apk_sha256 == sha for kept in state.kept):
+    if any(kept.apk_sha256 == sha for kept in state.kept):
+        print(f'{app.name}: same bytes as kept {sha[:12]}')
+    else:
         state.kept.append(Kept(apk_sha256=sha, path=str(path), version_code=0, downloaded_at=_now().isoformat(),
                                processed_with=None, posted=False, last_error=None))
     # the headers of the GET that produced these bytes, not of the earlier HEAD
@@ -94,13 +96,15 @@ def _process(app: AppConfig, patchers_dir: Path, server_url: str, secret: str, s
     kept.version_code = record.get('version_code', kept.version_code)
     version = record.get('version_name')
     features_off = record.get('features_off') or []
+    missing_keys = record.get('missing_keys') or []
     print(f'{app.name} {version} ({kept.version_code}): posted, revision {revision},'
           f' supported={supported}, features_off={features_off}')
     if not supported or features_off:
         state_word = 'unsupported' if not supported else 'supported'
         alerts.once(state, f'record:{sha}:{current}',
                     f'{app.name} {version}: {state_word}, features off: {", ".join(features_off) or "none"}',
-                    f'Patcher {current}, APK {sha}, revision {revision}.')
+                    f'Patcher {current}, APK {sha}, version code {kept.version_code}, revision {revision}.\n'
+                    f'Missing keys: {", ".join(missing_keys) or "none"}.')
 
 
 def _prune(state: AppState, keep: int) -> None:

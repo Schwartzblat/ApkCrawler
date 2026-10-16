@@ -17,6 +17,9 @@ OK = (200, {'revision': 7})
 APK = b'PK\x03\x04'  # every APK is a zip: it starts with a local file header
 DEAD_URL = 'http://127.0.0.1:1/app.apk'  # nothing listens there
 T0 = datetime(2026, 10, 17, tzinfo=timezone.utc)
+# What main.py --artifactory-only writes; the server forbids any other field but "source"
+RECORD_FIELDS = {'package', 'version_code', 'version_name', 'apk_sha256', 'dex_sha256', 'patcher_version',
+                 'artifacts', 'missing_keys', 'features_off', 'supported'}
 
 
 @pytest.fixture
@@ -68,10 +71,12 @@ def test_new_apk_is_processed_and_posted(env):
     [post] = env.http.posts
     assert post['path'] == '/api/internal/records'
     assert post['headers']['x-internal-token'] == 'sekret'
-    assert json.loads(post['body'])['source'] == 'fake.test'
+    assert set(SAMPLE_RECORD) == RECORD_FIELDS
+    assert json.loads(post['body']) == {**SAMPLE_RECORD, 'source': 'fake.test'}  # exactly, nothing added
     state = env.state()
     [kept] = state.kept
-    assert (kept.posted, kept.processed_with, kept.version_code, kept.last_error) == (True, '3.0.0', 1, None)
+    assert (kept.posted, kept.processed_with, kept.version_code, kept.last_error) == \
+        (True, '3.0.0', SAMPLE_RECORD['version_code'], None)
     assert state.etag == '"E1"'
     assert (env.dir / 'com.fake' / 'apks' / (kept.apk_sha256 + '.apk')).read_bytes() == APK + b'apk-one'
 
@@ -83,10 +88,12 @@ def test_unchanged_probe_does_nothing(env):
     assert len(calls(env.patcher)) == 1 and len(env.http.posts) == 1
 
 
-def test_same_bytes_new_etag_not_reprocessed(env):
+def test_same_bytes_new_etag_not_reprocessed(env, capsys):
     env.run()
     env.http.etag = '"E2"'
+    capsys.readouterr()
     env.run()
+    assert f'Fake: same bytes as kept {env.state().kept[0].apk_sha256[:12]}' in capsys.readouterr().out
     assert env.http.get_count == 2
     assert len(calls(env.patcher)) == 1 and len(env.http.posts) == 1
     state = env.state()
@@ -116,6 +123,15 @@ def test_unsupported_record_alerts_once(env):
     assert len(env.alerts()) == 2  # the second APK is a different record
     env.run()
     assert len(env.alerts()) == 2
+
+
+def test_record_alert_names_the_missing_keys_and_version_code(env):
+    set_behavior(env.patcher, exit=3, record={**SAMPLE_RECORD, 'supported': False, 'features_off': ['ab_props'],
+                                              'missing_keys': ['AB_PROPS_CLASS_NAME', 'AB_PROPS_BOOL_METHOD_NAME']})
+    env.run()
+    [alert] = env.alerts()
+    assert 'AB_PROPS_CLASS_NAME, AB_PROPS_BOOL_METHOD_NAME' in alert
+    assert str(SAMPLE_RECORD['version_code']) in alert
 
 
 def test_features_off_on_supported_record_alerts(env):
@@ -495,6 +511,13 @@ def test_main_accepts_https_server_url(wired, monkeypatch):
     monkeypatch.setenv('PATCH_SERVER_URL', 'HTTPS://androidmod.site')
     monkeypatch.setenv('CRAWLER_SECRET', 's')
     assert [s[0] for s in wired('--pipeline', 'artifacts')] == ['check', 'artifacts']
+
+
+@pytest.mark.parametrize('argv', [('--retry-failed',), ('--pipeline', 'build', '--retry-failed')])
+def test_retry_failed_needs_the_artifacts_pipeline(wired, capsys, argv):
+    with pytest.raises(SystemExit):
+        wired(*argv)
+    assert '--retry-failed' in capsys.readouterr().err
 
 
 def test_retry_failed_flag_parses():

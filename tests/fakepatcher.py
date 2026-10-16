@@ -37,9 +37,12 @@ elif b.get("record") is not None:
 sys.exit(b.get("exit", 0))
 '''
 
+# Shaped like WhatsAppPatcher's record: exactly these 10 fields, with these types
 SAMPLE_RECORD = {
-    "package_name": "com.whatsapp", "version_name": "2.25.1.1", "version_code": 1,
-    "apk_sha256": "ab" * 32, "supported": True,
+    "package": "com.whatsapp", "version_code": 252010001, "version_name": "2.25.1.1",
+    "apk_sha256": "ab" * 32, "dex_sha256": "cd" * 32, "patcher_version": "3.0.0",
+    "artifacts": {"CONTACT_JID_CLASS_NAME": "X.AbC", "CONTACT_JID_METHOD_NAME": "A01"},
+    "missing_keys": [], "features_off": [], "supported": True,
 }
 
 
