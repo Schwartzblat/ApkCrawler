@@ -5,9 +5,13 @@
         http.body = b'other'      # mutable between requests
         http.head_count, http.get_count
 
+POST records path/headers/body in `posts` and answers from the scripted
+`post_responses` list of (status, json_body), repeating the last entry.
+
 HEAD and GET answer from the same config unless the get_* overrides are set,
 which lets a test make GET differ from HEAD.
 """
+import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -27,12 +31,20 @@ class FakeHttp:
         self.drop_after = None
         self.head_count = 0
         self.get_count = 0
+        # POST: scripted (status, json_body) responses; the last one repeats.
+        self.post_responses = [(200, {})]
+        # One dict per POST: path, headers (lower-cased names), body (bytes).
+        self.posts = []
         self._server = None
         self._thread = None
 
     @property
     def url(self):
         return 'http://127.0.0.1:%d/app.apk' % self._server.server_address[1]
+
+    @property
+    def base_url(self):
+        return 'http://127.0.0.1:%d' % self._server.server_address[1]
 
     def __enter__(self):
         fake = self
@@ -66,6 +78,25 @@ class FakeHttp:
                         body = body[:fake.drop_after]
                     self.wfile.write(body)
                     self.wfile.flush()
+                self.close_connection = True
+
+            def do_POST(self):
+                n = int(self.headers.get('Content-Length') or 0)
+                fake.posts.append({
+                    'path': self.path,
+                    'headers': {k.lower(): v for k, v in self.headers.items()},
+                    'body': self.rfile.read(n),
+                })
+                i = min(len(fake.posts), len(fake.post_responses)) - 1
+                status, payload = fake.post_responses[i]
+                data = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(data)))
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                self.wfile.write(data)
+                self.wfile.flush()
                 self.close_connection = True
 
             def do_HEAD(self):
