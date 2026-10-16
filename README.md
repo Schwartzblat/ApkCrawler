@@ -101,6 +101,16 @@ Check on it:
     systemctl --user start crawler-artifacts.service    # run once now
     journalctl --user -u crawler-artifacts
 
+## Releasing a new patcher version
+
+Records posted for a patcher version that has no bundle on the server are invisible to the server's
+`latest`, so release in this order:
+
+1. Upload the new version's bundle from the patcher checkout: `python bundle.py --paywall ... --signing-key ...
+   --upload` (see the patcher's README).
+2. Then update the crawler's patcher checkout (`$PATCHERS_DIR/<PatcherName>`). The next run sees the new
+   `PATCHER_VERSION` and reprocesses the kept APKs.
+
 ## Launch-day step (not done yet)
 
 While WhatsApp is still also built by the crawler, subscribers receive crawler-built WhatsApp. On launch of

@@ -5,3 +5,5 @@ Description=Androidmod crawler: record WhatsApp signature-finder results
 Type=oneshot
 ExecStart=%h/PatchingMonorepo/tools/crawler/run_crawler.sh --pipeline artifacts
 TimeoutStartSec=45min
+# Print lines reach the journal at once (and are not lost when the timeout stops the unit)
+Environment=PYTHONUNBUFFERED=1

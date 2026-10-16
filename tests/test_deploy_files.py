@@ -28,6 +28,11 @@ def test_service_runs_the_artifacts_pipeline():
     assert service['Service']['TimeoutStartSec'] == '45min'
 
 
+def test_service_output_reaches_the_journal_unbuffered():
+    service = parse_unit('crawler-artifacts.service')
+    assert service['Service']['Environment'] == 'PYTHONUNBUFFERED=1'
+
+
 def test_run_crawler_changes_to_its_directory_first_and_is_executable():
     script = CRAWLER_DIR / 'run_crawler.sh'
     lines = [line.strip() for line in script.read_text().splitlines()]
