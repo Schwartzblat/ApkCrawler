@@ -7,6 +7,7 @@ never raised.
 """
 import os
 import smtplib
+import ssl
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
@@ -49,13 +50,14 @@ def _send_email(settings, subject: str, body: str) -> None:
     msg['To'] = to
     msg['Subject'] = _one_line(subject)
     msg.set_content(body)
+    context = ssl.create_default_context()  # verifies certificate and hostname
     if port == 465:
-        server = smtplib.SMTP_SSL(host, port, timeout=30)
+        server = smtplib.SMTP_SSL(host, port, timeout=30, context=context)
     else:
         server = smtplib.SMTP(host, port, timeout=30)
     with server:
         if port != 465:
-            server.starttls()
+            server.starttls(context=context)
         server.login(user, password)
         server.send_message(msg)
 

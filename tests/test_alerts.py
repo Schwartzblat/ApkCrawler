@@ -1,4 +1,5 @@
 import smtplib
+import ssl
 
 import pytest
 
@@ -33,6 +34,7 @@ class FakeSmtp:
         self.calls.append(name)
 
     def starttls(self, **kw):
+        self.starttls_kw = kw
         self._do('starttls')
 
     def login(self, user, password):
@@ -105,6 +107,23 @@ def test_sends_over_implicit_tls_on_465(env, monkeypatch, capsys):
     assert 'starttls' not in s.calls
     out = capsys.readouterr()
     assert PASSWORD not in out.out + out.err + log_text(env)
+
+
+def assert_verifying(ctx):
+    assert isinstance(ctx, ssl.SSLContext)
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+
+
+def test_implicit_tls_context_verifies(env, monkeypatch):
+    configure(monkeypatch)
+    alerts.notify('S', 'B')
+    assert_verifying(FakeSmtp.instances[0].kw.get('context'))
+
+
+def test_starttls_context_verifies(env, monkeypatch):
+    configure(monkeypatch, SMTP_PORT='587')
+    alerts.notify('S', 'B')
+    assert_verifying(FakeSmtp.instances[0].starttls_kw.get('context'))
 
 
 def test_blank_port_counts_as_unset(env, monkeypatch):
