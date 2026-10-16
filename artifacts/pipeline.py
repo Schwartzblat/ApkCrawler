@@ -15,6 +15,9 @@ from artifacts.runner import RunnerError, patcher_version, run_artifactory_only
 from artifacts.state import AppState, Kept, load, save
 
 
+RETRY_HINT = 'After fixing the cause, run the crawler with --pipeline artifacts --retry-failed.'
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -45,7 +48,8 @@ def _process(app: AppConfig, patchers_dir: Path, server_url: str, secret: str, s
         record, supported = run_artifactory_only(patchers_dir, app, Path(kept.path))
     except RunnerError as error:
         kept.last_error, kept.processed_with = str(error), current
-        alerts.once(state, f'run:{sha}:{current}', f'{app.name}: patcher {current} failed on {sha[:12]}', str(error))
+        alerts.once(state, f'run:{sha}:{current}', f'{app.name}: patcher {current} failed on {sha[:12]}',
+                    f'{error}\n\n{RETRY_HINT}')
         return
     try:
         revision = post_record(record, app.direct_source, server_url, secret)
@@ -57,7 +61,7 @@ def _process(app: AppConfig, patchers_dir: Path, server_url: str, secret: str, s
         else:
             kept.last_error = str(error)
             alerts.once(state, f'post:{sha}:{current}',
-                        f'{app.name}: server rejected the record for {sha[:12]}', str(error))
+                        f'{app.name}: server rejected the record for {sha[:12]}', f'{error}\n\n{RETRY_HINT}')
         return
     kept.posted, kept.processed_with, kept.last_error = True, current, None
     kept.version_code = record.get('version_code', kept.version_code)
@@ -83,13 +87,16 @@ def _prune(state: AppState, keep: int) -> None:
 
 
 def _run_app(app: AppConfig, patchers_dir: Path, artifacts_dir: Path, server_url: str, secret: str,
-             keep: int) -> None:
+             keep: int, retry_failed: bool) -> None:
     try:
         current = patcher_version(patchers_dir, app.patcher_name)
     except RunnerError as error:
         print(f'{app.name}: {error}')
         return
     state = load(artifacts_dir, app.package_name)
+    if retry_failed:
+        for kept in state.kept:
+            kept.last_error = None  # parked by a 4xx or a crash: try again on this run
     _fetch_new(app, artifacts_dir, state)
     _prune(state, keep)
     save(artifacts_dir, app.package_name, state)
@@ -100,7 +107,7 @@ def _run_app(app: AppConfig, patchers_dir: Path, artifacts_dir: Path, server_url
 
 
 def run(apps: Iterable[AppConfig], patchers_dir: Path, artifacts_dir: Path, server_url: str, secret: str,
-        keep: int = 3) -> None:
+        keep: int = 3, retry_failed: bool = False) -> None:
     artifacts_dir = Path(artifacts_dir)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     with open(artifacts_dir / '.lock', 'w') as lock:
@@ -111,4 +118,4 @@ def run(apps: Iterable[AppConfig], patchers_dir: Path, artifacts_dir: Path, serv
             return
         for app in apps:
             if 'artifacts' in app.pipelines and app.direct_url:
-                _run_app(app, Path(patchers_dir), artifacts_dir, server_url, secret, keep)
+                _run_app(app, Path(patchers_dir), artifacts_dir, server_url, secret, keep, retry_failed)

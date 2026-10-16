@@ -170,13 +170,37 @@ def test_patcher_version_change_reprocesses_kept_apks(env):
 
 
 def test_keeps_only_newest_three(env):
+    import hashlib
+    shas = [hashlib.sha256(b'apk%d' % i).hexdigest() for i in range(5)]
     for i in range(5):
         env.http.body, env.http.etag = b'apk%d' % i, '"%d"' % i
         env.run()
     state = env.state()
-    assert len(state.kept) == 3
-    files = sorted(p.name for p in (env.dir / 'com.fake' / 'apks').iterdir())
-    assert files == sorted(k.apk_sha256 + '.apk' for k in state.kept)
+    assert {k.apk_sha256 for k in state.kept} == set(shas[2:])
+    apks = env.dir / 'com.fake' / 'apks'
+    assert sorted(p.name for p in apks.iterdir()) == sorted(s + '.apk' for s in shas[2:])
+    assert not (apks / (shas[0] + '.apk')).exists()
+    assert len(env.http.posts) == 5  # every new release processed and posted once
+
+
+def test_parked_4xx_retried_only_with_retry_failed(env):
+    env.http.post_responses = [(401, {'detail': 'bad token'})]
+    env.run()
+    assert len(env.http.posts) == 1
+    assert '--retry-failed' in env.alerts()[0]
+    env.http.post_responses = [OK]
+    env.run()
+    assert len(env.http.posts) == 1
+    pipeline.run([env.app], env.patcher.parent, env.dir, env.http.base_url, 'sekret', retry_failed=True)
+    assert len(env.http.posts) == 2
+    kept = env.state().kept[0]
+    assert kept.posted and kept.last_error is None
+
+
+def test_crash_alert_mentions_retry_flag(env):
+    set_behavior(env.patcher, exit=1, record=None)
+    env.run()
+    assert '--retry-failed' in env.alerts()[0]
 
 
 def test_second_run_exits_when_locked(env, capsys):
@@ -243,3 +267,15 @@ def test_main_artifacts_requires_env(wired, monkeypatch, missing, capsys):
         wired('--pipeline', 'artifacts')
     err = capsys.readouterr().err
     assert missing in err and 'value-not-to-print' not in err
+
+
+def test_retry_failed_flag_parses():
+    assert crawler_module.build_parser().parse_args(['--retry-failed']).retry_failed is True
+    assert crawler_module.build_parser().parse_args([]).retry_failed is False
+
+
+def test_main_passes_retry_failed(wired, monkeypatch):
+    monkeypatch.setenv('PATCH_SERVER_URL', 'http://srv')
+    monkeypatch.setenv('CRAWLER_SECRET', 's')
+    seen = wired('--pipeline', 'artifacts', '--retry-failed')
+    assert seen[-1][2] == {'retry_failed': True}

@@ -177,6 +177,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--pipeline', choices=PIPELINES, default='build',
                         help='build: download and patch new releases (default); artifacts: record'
                              ' signature-finder results; all: both')
+    parser.add_argument('--retry-failed', action='store_true',
+                        help='artifacts pipeline: retry APKs parked by a patcher crash or a rejected record')
     return parser
 
 
@@ -200,7 +202,8 @@ def main():
     if runs_artifacts:
         artifacts_dir = Path(os.environ.get(ARTIFACTS_DIR) or DEFAULT_ARTIFACTS_DIR).expanduser().absolute()
         artifacts_pipeline.run(apps_in('artifacts'), env_path(PATCHERS_DIR), artifacts_dir,
-                               os.environ[PATCH_SERVER_URL], os.environ[CRAWLER_SECRET])
+                               os.environ[PATCH_SERVER_URL], os.environ[CRAWLER_SECRET],
+                               retry_failed=args.retry_failed)
 
 
 if __name__ == '__main__':
