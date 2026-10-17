@@ -75,8 +75,8 @@ run. The patcher runs with a 10 minute timeout and without `CRAWLER_SECRET`, `BU
 ### Failures
 
 A patcher crash, or a 4xx (other than 408 and 429, which are retried) or redirect from the server,
-alerts once and parks that APK until the next patcher release, so a broken APK does not email every 15
-minutes. Redirects are not followed: point `PATCH_SERVER_URL` at the final URL. After fixing the cause (patcher bug, wrong
+alerts once and parks that APK until the next patcher release, so a broken APK does not email on every
+run. Redirects are not followed: point `PATCH_SERVER_URL` at the final URL. After fixing the cause (patcher bug, wrong
 `CRAWLER_SECRET`, ...), retry immediately:
 
     ./run_crawler.sh --pipeline artifacts --retry-failed
@@ -85,7 +85,7 @@ If the retry fails again, it prints the error and alerts again.
 
 ## Scheduling the artifacts pipeline
 
-`deploy/` holds a systemd user unit pair that runs the pipeline every 15 minutes (`Persistent=true`
+`deploy/` holds a systemd user unit pair that runs the pipeline every hour (`Persistent=true`
 catches up after downtime, `RandomizedDelaySec=60`, 45 minute timeout). No root needed.
 
 `ExecStart` in `deploy/crawler-artifacts.service` is `%h/PatchingMonorepo/tools/crawler/run_crawler.sh`.
