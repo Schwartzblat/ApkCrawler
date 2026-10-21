@@ -62,10 +62,10 @@ def test_check_fails_when_a_variable_is_unset(patcher_env, monkeypatch, variable
 
 def test_check_names_each_missing_patcher_and_the_paywall(patcher_env):
     patchers_dir, paywall = patcher_env
-    (patchers_dir / 'MakoPatcher' / 'main.py').unlink()
     paywall.rmdir()
+    # MAKO is not in APPS, so patcher_env made no checkout for it.
     with pytest.raises(ValueError) as error:
-        check_patchers(APPS)
+        check_patchers([*APPS, MAKO])
     assert str(patchers_dir / 'MakoPatcher' / 'main.py') in str(error.value)
     assert str(paywall) in str(error.value)
     assert 'WhatsAppPatcher' not in str(error.value)

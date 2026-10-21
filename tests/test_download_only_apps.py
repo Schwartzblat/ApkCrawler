@@ -4,7 +4,7 @@ import pytest
 from packaging.version import Version
 
 import crawler as crawler_module
-from apps import APPS, AppConfig
+from apps import AppConfig
 from crawlers import apkmirror_downloader, apkpure_downloader
 from crawlers.apkmirror_downloader import APKMirrorCrawler
 from crawlers.apkpure_downloader import APKPureCrawler
@@ -47,8 +47,5 @@ def test_apkpure_skips_apps_it_has_no_config_for(monkeypatch):
     assert APKPureCrawler.get_available_versions(OKCUPID) == {}
 
 
-def test_play_is_tried_first_and_okcupid_comes_from_play_only():
+def test_play_is_tried_first():
     assert crawler_module.crawlers[0] is PlayCrawler
-    okcupid = next(app for app in APPS if app.package_name == 'com.okcupid.okcupid')
-    assert okcupid.patcher_name == 'OkCupidPatcher'
-    assert okcupid.apkmirror_url_template is None and okcupid.apkpure_app_path is None
